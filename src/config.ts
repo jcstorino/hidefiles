@@ -8,6 +8,7 @@ export interface Profile {
     detail?: string;
     hidden: string[];
     peek?: string[];
+    enabled?: boolean;
 }
 
 export interface Configuration {
@@ -22,6 +23,9 @@ export interface ConfigurationFile {
     location: ConfigurationLocation;
     config: Configuration;
 }
+
+export const isProfileEnabled = (profile: Profile): boolean =>
+    profile.enabled !== false;
 
 export const setData = async (config: Configuration) => {};
 
@@ -48,7 +52,7 @@ export const getData = async (): Promise<ConfigurationFile | undefined> => {
                 detail: "Shows all files without exception.",
             },
             ...data.profiles,
-        ];
+        ].filter(isProfileEnabled);
     }
     return {
         location: location,

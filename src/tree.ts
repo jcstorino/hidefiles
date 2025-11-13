@@ -9,7 +9,7 @@ import {
     TreeItemCollapsibleState,
     workspace,
 } from "vscode";
-import { getDataUnmodified } from "./config";
+import { getDataUnmodified, isProfileEnabled } from "./config";
 
 interface RecursiveFile {
     activeProfile: boolean;
@@ -77,7 +77,18 @@ export class HiddenFilesProvider implements TreeDataProvider<TreeItem> {
                 "hidefiles.selectedProfile"
             );
 
-            files.config.profiles.forEach((c) => {
+            const visibleProfiles = files.config.profiles.filter(
+                isProfileEnabled
+            );
+            let activeProfileName = selectedProfile;
+            if (
+                !activeProfileName ||
+                !visibleProfiles.find((profile) => profile.name === activeProfileName)
+            ) {
+                activeProfileName = "Show All Files";
+            }
+
+            visibleProfiles.forEach((c) => {
                 const curRecursive: RecursiveFile = {
                     file: c.name,
                     children: [],
@@ -109,7 +120,7 @@ export class HiddenFilesProvider implements TreeDataProvider<TreeItem> {
                                 file += "/";
                             }
                             newFile = {
-                                activeProfile: c.name === selectedProfile,
+                                activeProfile: c.name === activeProfileName,
                                 file: file,
                                 children: [],
                                 fullFile: fullFile,
@@ -136,7 +147,7 @@ export class HiddenFilesProvider implements TreeDataProvider<TreeItem> {
                     },
                     file.children,
                     {
-                        active: file.file === selectedProfile,
+                        active: file.file === activeProfileName,
                         showAll: false,
                         peek: false,
                         type: FileType.Profile,
@@ -155,7 +166,7 @@ export class HiddenFilesProvider implements TreeDataProvider<TreeItem> {
                     },
                     [],
                     {
-                        active: selectedProfile === "Show All Files",
+                        active: activeProfileName === "Show All Files",
                         showAll: true,
                         peek: false,
                         type: FileType.Profile,
