@@ -130,13 +130,14 @@ export async function activate(context: vscode.ExtensionContext) {
         profileLabel?: string,
         allowFallback = true
     ): Promise<string | undefined> {
-        const data = await getData();
+        const data = await getData({ includeDisabled: true });
         if (!data.config || !data.config.profiles.length) {
             return undefined;
         }
 
-        const availableProfiles = data.config.profiles.filter(isProfileEnabled);
-        if (!availableProfiles.length) {
+        const allProfiles = data.config.profiles;
+        const availableProfiles = allProfiles.filter(isProfileEnabled);
+        if (!availableProfiles.length && allowFallback) {
             return undefined;
         }
 
@@ -148,7 +149,7 @@ export async function activate(context: vscode.ExtensionContext) {
             : configuration.get<string>("hidefiles.selectedProfile");
 
         let activeProfile = providedName
-            ? availableProfiles.find((profile) => profile.name === providedName)
+            ? allProfiles.find((profile) => profile.name === providedName)
             : undefined;
 
         if (!activeProfile && !allowFallback) {
@@ -156,11 +157,18 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         if (!activeProfile) {
-            activeProfile = availableProfiles[0];
+            activeProfile = availableProfiles[0] ?? allProfiles[0];
         }
 
         if (!activeProfile) {
             return undefined;
+        }
+
+        if (allowFallback && !isProfileEnabled(activeProfile)) {
+            activeProfile = availableProfiles[0] ?? allProfiles[0];
+            if (!activeProfile) {
+                return undefined;
+            }
         }
 
         if (
