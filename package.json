@@ -14,6 +14,7 @@
     "activationEvents": [
         "onView:hidden-files",
         "onCommand:hidefiles.reloadConfig",
+        "onCommand:hidefiles.applyProfile",
         "onStartupFinished"
     ],
     "keywords": [
@@ -114,6 +115,10 @@
             {
                 "command": "hidefiles.reloadConfig",
                 "title": "Hide Files: Reload Profile"
+            },
+            {
+                "command": "hidefiles.applyProfile",
+                "title": "Hide Files: Apply Profile"
             },
             {
                 "command": "hidefiles.hidefile",

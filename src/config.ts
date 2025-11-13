@@ -8,6 +8,7 @@ export interface Profile {
     detail?: string;
     hidden: string[];
     peek?: string[];
+    enabled?: boolean;
 }
 
 export interface Configuration {
@@ -23,9 +24,20 @@ export interface ConfigurationFile {
     config: Configuration;
 }
 
+export const isProfileEnabled = (profile: Profile): boolean =>
+    profile.enabled !== false;
+
 export const setData = async (config: Configuration) => {};
 
-export const getData = async (): Promise<ConfigurationFile | undefined> => {
+interface GetDataOptions {
+    includeDisabled?: boolean;
+    includeShowAll?: boolean;
+}
+
+export const getData = async (
+    options: GetDataOptions = {}
+): Promise<ConfigurationFile | undefined> => {
+    const { includeDisabled = false, includeShowAll = true } = options;
     let data;
 
     const workspaceConfig = await vscode.workspace.getConfiguration();
@@ -40,15 +52,21 @@ export const getData = async (): Promise<ConfigurationFile | undefined> => {
         data = await getDataByConfig(false);
     }
     if (data) {
-        data.profiles = [
-            {
-                description: "",
-                hidden: [],
-                name: "Show All Files",
-                detail: "Shows all files without exception.",
-            },
-            ...data.profiles,
-        ];
+        const profiles: Profile[] = includeShowAll
+            ? [
+                  {
+                      description: "",
+                      hidden: [],
+                      name: "Show All Files",
+                      detail: "Shows all files without exception.",
+                  },
+                  ...data.profiles,
+              ]
+            : [...data.profiles];
+
+        data.profiles = includeDisabled
+            ? profiles
+            : profiles.filter(isProfileEnabled);
     }
     return {
         location: location,
