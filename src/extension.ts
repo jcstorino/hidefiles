@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/semi */
 import * as vscode from "vscode";
+import { URLSearchParams } from "url";
 import {
     configExists,
     Configuration,
@@ -362,9 +363,141 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
 
+    const resolveProfileName = (...args: unknown[]): string | undefined => {
+        if (!args.length) {
+            return undefined;
+        }
+
+        const tryParseString = (value: string): string | undefined => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+                return undefined;
+            }
+
+            let normalized = trimmed;
+            if (trimmed.includes("%")) {
+                try {
+                    normalized = decodeURIComponent(trimmed);
+                } catch (error) {
+                    console.warn(
+                        "Failed to decode profile argument.",
+                        error
+                    );
+                }
+            }
+
+            if (
+                (normalized.startsWith("[") && normalized.endsWith("]")) ||
+                (normalized.startsWith("{") && normalized.endsWith("}"))
+            ) {
+                try {
+                    const parsed = JSON.parse(normalized);
+                    if (typeof parsed === "string") {
+                        return parsed;
+                    }
+                    if (Array.isArray(parsed) && typeof parsed[0] === "string") {
+                        return parsed[0];
+                    }
+                } catch (error) {
+                    console.warn("Failed to parse profile argument.", error);
+                }
+            }
+
+            return normalized;
+        };
+
+        const firstArg = args[0];
+        if (typeof firstArg === "string") {
+            return tryParseString(firstArg);
+        }
+        if (Array.isArray(firstArg) && firstArg.length > 0) {
+            const candidate = firstArg[0];
+            if (typeof candidate === "string") {
+                return candidate;
+            }
+        }
+        if (
+            typeof firstArg === "object" &&
+            firstArg !== null &&
+            typeof (firstArg as { profile?: unknown }).profile === "string"
+        ) {
+            return (firstArg as { profile: string }).profile;
+        }
+
+        return undefined;
+    };
+
+    const applyProfileFromUri = async (profileName?: string) => {
+        const appliedProfile = await applyProfile(profileName, false);
+        if (!appliedProfile) {
+            vscode.window.showWarningMessage(
+                profileName
+                    ? `Hide Files profile "${profileName}" could not be applied.`
+                    : "No enabled Hide Files profiles are available to apply."
+            );
+            return;
+        }
+
+        provider.refresh();
+    };
+
+    const uriHandler: vscode.UriHandler = {
+        handleUri: async (uri: vscode.Uri) => {
+            if (!uri.path || uri.path === "/") {
+                return;
+            }
+
+            const segments = uri.path.split("/").filter((segment) => segment);
+            if (!segments.length) {
+                return;
+            }
+
+            const [action, ...rest] = segments;
+            if (action !== "applyProfile") {
+                return;
+            }
+
+            try {
+                const params = new URLSearchParams(uri.query ?? "");
+                let profileName =
+                    params.get("profile") ??
+                    params.get("name") ??
+                    params.get("selected");
+
+                if (!profileName) {
+                    const argsParam = params.get("args");
+                    if (argsParam) {
+                        profileName = resolveProfileName(argsParam);
+                    }
+                }
+
+                if (!profileName && rest.length) {
+                    profileName = decodeURIComponent(rest.join("/"));
+                }
+
+                if (!profileName || profileName.trim() === "") {
+                    vscode.window.showWarningMessage(
+                        "No Hide Files profile was provided in the URI."
+                    );
+                    return;
+                }
+
+                await applyProfileFromUri(profileName);
+            } catch (error) {
+                console.error("Failed to handle HideFiles URI.", error);
+                vscode.window.showErrorMessage(
+                    "An error occurred while handling the Hide Files URI."
+                );
+            }
+        },
+    };
+
+    context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
+
     let disposableApplyProfileCommand = vscode.commands.registerCommand(
         "hidefiles.applyProfile",
-        async (profileName?: string) => {
+        async (...profileArgs: unknown[]) => {
+            let profileName = resolveProfileName(...profileArgs);
             if (!profileName || profileName === "") {
                 const config = await getData();
 
@@ -404,15 +537,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 profileName = selection.label;
             }
 
-            const appliedProfile = await applyProfile(profileName, false);
-            if (!appliedProfile) {
-                vscode.window.showWarningMessage(
-                    `Hide Files profile "${profileName}" could not be applied.`
-                );
-                return;
-            }
-
-            provider.refresh();
+            await applyProfileFromUri(profileName);
         }
     );
 
