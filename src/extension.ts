@@ -7,6 +7,7 @@ import {
     ConfigurationLocation,
     getData,
     getDataUnmodified,
+    Profile,
     writeConfig,
 } from "./config";
 import * as fs from "fs";
@@ -16,6 +17,7 @@ import { HiddenFilesProvider } from "./tree";
 import { isProfileEnabled } from "./config";
 
 export async function activate(context: vscode.ExtensionContext) {
+    const output = vscode.window.createOutputChannel("HideFiles Debug");
     const provider = new HiddenFilesProvider();
     vscode.window.registerTreeDataProvider("hidden-files", provider);
     vscode.window.createTreeView("hidden-files", {
@@ -184,7 +186,109 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         hideFiles(activeProfile);
+        logWorkspaceState(activeProfile, output);
+        await prioritizeWorkspaceFolder(activeProfile);
         return activeProfile.name;
+    }
+
+    async function prioritizeWorkspaceFolder(profile: Profile): Promise<void> {
+        const matchName = profile.folderFirst;
+        if (!matchName || matchName.trim() === "") {
+            return;
+        }
+
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length < 2) {
+            return;
+        }
+
+        const normalizedMatch = matchName.trim().toLowerCase();
+        const matchedIndex = workspaceFolders.findIndex(
+            (folder) =>
+                folder.name?.trim().toLowerCase() === normalizedMatch
+        );
+
+        if (matchedIndex <= 0) {
+            return;
+        }
+
+        const preferredFolder = workspaceFolders[matchedIndex];
+        const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
+        const attemptKey = `folderFirst:${workspaceFile ?? "none"}:${profile.name}:${matchName}`;
+        const lastAttempt = context.workspaceState.get<string>(
+            "hidefiles.folderFirst.lastAttempt"
+        );
+        const lastAttemptAt = context.workspaceState.get<number>(
+            "hidefiles.folderFirst.lastAttemptAt"
+        );
+        if (
+            lastAttempt === attemptKey &&
+            lastAttemptAt &&
+            Date.now() - lastAttemptAt < 10000
+        ) {
+            output.appendLine(
+                "Skipping folderFirst reload to avoid infinite loop."
+            );
+            return;
+        }
+        output.appendLine(
+            `before: ${workspaceFolders.map((f) => f.name).join(", ")}`
+        );
+
+        const reordered = [
+            preferredFolder,
+            ...workspaceFolders.filter((_, index) => index !== matchedIndex),
+        ];
+        const updated = vscode.workspace.updateWorkspaceFolders(
+            0,
+            workspaceFolders.length,
+            ...reordered.map((folder) => ({
+                uri: folder.uri,
+                name: folder.name,
+            }))
+        );
+        if (!updated) {
+            output.appendLine("updateWorkspaceFolders replace failed");
+            return;
+        }
+
+        const afterFolders = vscode.workspace.workspaceFolders ?? [];
+        output.appendLine(
+            `after: ${afterFolders.map((f) => f.name).join(", ")}`
+        );
+        await context.workspaceState.update(
+            "hidefiles.folderFirst.lastAttempt",
+            attemptKey
+        );
+        await context.workspaceState.update(
+            "hidefiles.folderFirst.lastAttemptAt",
+            Date.now()
+        );
+        output.appendLine(
+            "folderFirst applied; skipping reload to avoid UI disruption."
+        );
+    }
+
+    function logWorkspaceState(profile: Profile, channel: vscode.OutputChannel) {
+        const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        const folderNames = folders.map((folder) => folder.name);
+        const matchName = profile.folderFirst?.trim() ?? "";
+        const normalizedMatch = matchName.toLowerCase();
+        const matchedIndex = matchName
+            ? folders.findIndex(
+                  (folder) =>
+                      folder.name?.trim().toLowerCase() === normalizedMatch
+              )
+            : -1;
+
+        channel.appendLine("---- HideFiles Debug ----");
+        channel.appendLine(`workspaceFile: ${workspaceFile ?? "<none>"}`);
+        channel.appendLine(`folders: ${folderNames.join(", ")}`);
+        channel.appendLine(
+            `profile: ${profile.name} | folderFirst: ${matchName || "<none>"}`
+        );
+        channel.appendLine(`matchedIndex: ${matchedIndex}`);
     }
 
     async function refreshHideFiles(profile?: string): Promise<boolean> {
@@ -538,6 +642,35 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             await applyProfileFromUri(profileName);
+        }
+    );
+
+    let disposableShowProfile = vscode.commands.registerCommand(
+        "hide-files.show",
+        async (...profileArgs: unknown[]) => {
+            let profileName: string | undefined;
+            if (
+                profileArgs.length > 1 &&
+                typeof profileArgs[1] === "string"
+            ) {
+                profileName = profileArgs[1] as string;
+            } else {
+                profileName = resolveProfileName(...profileArgs);
+            }
+
+            if (!profileName || profileName.trim() === "") {
+                vscode.window.showWarningMessage(
+                    "No Hide Files profile was provided."
+                );
+                return;
+            }
+
+            const applied = await refreshHideFiles(profileName);
+            if (!applied) {
+                vscode.window.showWarningMessage(
+                    "No enabled Hide Files profiles are available to apply."
+                );
+            }
         }
     );
 
@@ -1180,6 +1313,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(disposableReloadView);
     context.subscriptions.push(disposableReload);
     context.subscriptions.push(disposableApplyProfileCommand);
+    context.subscriptions.push(disposableShowProfile);
     context.subscriptions.push(disposableHideFile);
     context.subscriptions.push(disposableHiddenFiles);
 }
