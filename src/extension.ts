@@ -208,7 +208,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 folder.name?.trim().toLowerCase() === normalizedMatch
         );
 
-        if (matchedIndex <= 0) {
+        if (matchedIndex < 0) {
             return;
         }
 
@@ -235,27 +235,32 @@ export async function activate(context: vscode.ExtensionContext) {
             `before: ${workspaceFolders.map((f) => f.name).join(", ")}`
         );
 
-        const reordered = [
-            preferredFolder,
-            ...workspaceFolders.filter((_, index) => index !== matchedIndex),
-        ];
-        const updated = vscode.workspace.updateWorkspaceFolders(
-            0,
-            workspaceFolders.length,
-            ...reordered.map((folder) => ({
-                uri: folder.uri,
-                name: folder.name,
-            }))
-        );
-        if (!updated) {
-            output.appendLine("updateWorkspaceFolders replace failed");
-            return;
+        if (matchedIndex > 0) {
+            const reordered = [
+                preferredFolder,
+                ...workspaceFolders.filter(
+                    (_, index) => index !== matchedIndex
+                ),
+            ];
+            const updated = vscode.workspace.updateWorkspaceFolders(
+                0,
+                workspaceFolders.length,
+                ...reordered.map((folder) => ({
+                    uri: folder.uri,
+                    name: folder.name,
+                }))
+            );
+            if (!updated) {
+                output.appendLine("updateWorkspaceFolders replace failed");
+                return;
+            }
         }
 
         const afterFolders = vscode.workspace.workspaceFolders ?? [];
         output.appendLine(
             `after: ${afterFolders.map((f) => f.name).join(", ")}`
         );
+        await updateTerminalCwd(preferredFolder.uri.fsPath);
         await context.workspaceState.update(
             "hidefiles.folderFirst.lastAttempt",
             attemptKey
@@ -267,6 +272,26 @@ export async function activate(context: vscode.ExtensionContext) {
         output.appendLine(
             "folderFirst applied; skipping reload to avoid UI disruption."
         );
+    }
+
+    async function updateTerminalCwd(cwdPath: string): Promise<void> {
+        if (!cwdPath || cwdPath.trim() === "") {
+            return;
+        }
+
+        const terminal = vscode.window.activeTerminal;
+        if (terminal) {
+            const escapedPath = cwdPath.replace(/"/g, '`"');
+            terminal.sendText(
+                `Set-Location -LiteralPath "${escapedPath}"; Clear-Host`,
+                true
+            );
+            return;
+        }
+
+        vscode.window.createTerminal({
+            cwd: cwdPath,
+        });
     }
 
     function logWorkspaceState(profile: Profile, channel: vscode.OutputChannel) {
