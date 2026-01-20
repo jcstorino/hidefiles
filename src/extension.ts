@@ -281,11 +281,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
         const terminal = vscode.window.activeTerminal;
         if (terminal) {
+            await terminal.processId;
             const escapedPath = cwdPath.replace(/"/g, '`"');
-            terminal.sendText(
-                `Set-Location -LiteralPath "${escapedPath}"; Clear-Host`,
-                true
-            );
+            setTimeout(() => {
+                terminal.sendText(
+                    `Set-Location -LiteralPath "${escapedPath}"; Clear-Host`,
+                    true
+                );
+            }, 50);
             return;
         }
 
