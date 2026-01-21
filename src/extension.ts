@@ -11,13 +11,13 @@ import {
     writeConfig,
 } from "./config";
 import * as fs from "fs";
+import * as path from "path";
 import { hideFiles } from "./core";
 import { getConfigs } from "./create";
 import { HiddenFilesProvider } from "./tree";
 import { isProfileEnabled } from "./config";
 
 export async function activate(context: vscode.ExtensionContext) {
-    const output = vscode.window.createOutputChannel("HideFiles Debug");
     const provider = new HiddenFilesProvider();
     vscode.window.registerTreeDataProvider("hidden-files", provider);
     vscode.window.createTreeView("hidden-files", {
@@ -186,7 +186,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         hideFiles(activeProfile);
-        logWorkspaceState(activeProfile, output);
         await prioritizeWorkspaceFolder(activeProfile);
         return activeProfile.name;
     }
@@ -213,6 +212,9 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         const preferredFolder = workspaceFolders[matchedIndex];
+        const terminalPath =
+            resolveWorkspaceFolderPath(matchName, profile.pathBase) ??
+            applyPathBase(preferredFolder.uri.fsPath, profile.pathBase);
         const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
         const attemptKey = `folderFirst:${workspaceFile ?? "none"}:${profile.name}:${matchName}`;
         const lastAttempt = context.workspaceState.get<string>(
@@ -226,14 +228,9 @@ export async function activate(context: vscode.ExtensionContext) {
             lastAttemptAt &&
             Date.now() - lastAttemptAt < 10000
         ) {
-            output.appendLine(
-                "Skipping folderFirst reload to avoid infinite loop."
-            );
+            await updateTerminalCwd(terminalPath);
             return;
         }
-        output.appendLine(
-            `before: ${workspaceFolders.map((f) => f.name).join(", ")}`
-        );
 
         if (matchedIndex > 0) {
             const reordered = [
@@ -251,16 +248,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 }))
             );
             if (!updated) {
-                output.appendLine("updateWorkspaceFolders replace failed");
                 return;
             }
         }
 
-        const afterFolders = vscode.workspace.workspaceFolders ?? [];
-        output.appendLine(
-            `after: ${afterFolders.map((f) => f.name).join(", ")}`
-        );
-        await updateTerminalCwd(preferredFolder.uri.fsPath);
+        await updateTerminalCwd(terminalPath);
         await context.workspaceState.update(
             "hidefiles.folderFirst.lastAttempt",
             attemptKey
@@ -268,9 +260,6 @@ export async function activate(context: vscode.ExtensionContext) {
         await context.workspaceState.update(
             "hidefiles.folderFirst.lastAttemptAt",
             Date.now()
-        );
-        output.appendLine(
-            "folderFirst applied; skipping reload to avoid UI disruption."
         );
     }
 
@@ -297,27 +286,66 @@ export async function activate(context: vscode.ExtensionContext) {
         });
     }
 
-    function logWorkspaceState(profile: Profile, channel: vscode.OutputChannel) {
-        const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
-        const folders = vscode.workspace.workspaceFolders ?? [];
-        const folderNames = folders.map((folder) => folder.name);
-        const matchName = profile.folderFirst?.trim() ?? "";
-        const normalizedMatch = matchName.toLowerCase();
-        const matchedIndex = matchName
-            ? folders.findIndex(
-                  (folder) =>
-                      folder.name?.trim().toLowerCase() === normalizedMatch
-              )
-            : -1;
+    function resolveWorkspaceFolderPath(
+        folderName?: string,
+        pathBase?: string
+    ): string | undefined {
+        if (!folderName || folderName.trim() === "") {
+            return undefined;
+        }
 
-        channel.appendLine("---- HideFiles Debug ----");
-        channel.appendLine(`workspaceFile: ${workspaceFile ?? "<none>"}`);
-        channel.appendLine(`folders: ${folderNames.join(", ")}`);
-        channel.appendLine(
-            `profile: ${profile.name} | folderFirst: ${matchName || "<none>"}`
-        );
-        channel.appendLine(`matchedIndex: ${matchedIndex}`);
+        const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
+        if (!workspaceFile || !fs.existsSync(workspaceFile)) {
+            return undefined;
+        }
+
+        try {
+            const raw = fs.readFileSync(workspaceFile, "utf8");
+            const data = JSON.parse(raw) as {
+                folders?: Array<{ name?: string; path?: string; uri?: string }>;
+            };
+            if (!Array.isArray(data.folders)) {
+                return undefined;
+            }
+
+            const normalizedName = folderName.trim().toLowerCase();
+            const folderEntry = data.folders.find(
+                (folder) =>
+                    folder.name?.trim().toLowerCase() === normalizedName
+            );
+            if (!folderEntry) {
+                return undefined;
+            }
+
+            if (folderEntry.path) {
+                const basePath = path.resolve(
+                    path.dirname(workspaceFile),
+                    folderEntry.path
+                );
+                return applyPathBase(basePath, pathBase);
+            }
+
+            if (folderEntry.uri) {
+                try {
+                    const basePath = vscode.Uri.parse(folderEntry.uri).fsPath;
+                    return applyPathBase(basePath, pathBase);
+                } catch {
+                    return undefined;
+                }
+            }
+        } catch (error) {}
+
+        return undefined;
     }
+
+    function applyPathBase(basePath: string, pathBase?: string): string {
+        if (!pathBase || pathBase.trim() === "") {
+            return basePath;
+        }
+
+        return path.join(basePath, pathBase.trim());
+    }
+
 
     async function refreshHideFiles(profile?: string): Promise<boolean> {
         const appliedProfile = await applyProfile(profile);

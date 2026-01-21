@@ -10,6 +10,7 @@ export interface Profile {
     peek?: string[];
     enabled?: boolean;
     folderFirst?: string;
+    pathBase?: string;
 }
 
 export interface Configuration {
