@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/semi */
 import * as vscode from "vscode";
 import { URLSearchParams } from "url";
+import * as os from "os";
 import {
     configExists,
     Configuration,
@@ -192,12 +193,15 @@ export async function activate(context: vscode.ExtensionContext) {
 
     async function prioritizeWorkspaceFolder(profile: Profile): Promise<void> {
         const matchName = profile.folderFirst;
+        const fallbackPath = resolveProfileWorkdir(profile);
         if (!matchName || matchName.trim() === "") {
+            await writeCodexWorkdirContext(profile, fallbackPath);
             return;
         }
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length < 2) {
+            await writeCodexWorkdirContext(profile, fallbackPath);
             return;
         }
 
@@ -229,6 +233,7 @@ export async function activate(context: vscode.ExtensionContext) {
             Date.now() - lastAttemptAt < 10000
         ) {
             await updateTerminalCwd(terminalPath);
+            await writeCodexWorkdirContext(profile, terminalPath);
             return;
         }
 
@@ -253,6 +258,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         await updateTerminalCwd(terminalPath);
+        await writeCodexWorkdirContext(profile, terminalPath);
         await context.workspaceState.update(
             "hidefiles.folderFirst.lastAttempt",
             attemptKey
@@ -268,22 +274,15 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        const terminal = vscode.window.activeTerminal;
-        if (terminal) {
-            await terminal.processId;
-            const escapedPath = cwdPath.replace(/"/g, '`"');
-            setTimeout(() => {
-                terminal.sendText(
-                    `Set-Location -LiteralPath "${escapedPath}"; Clear-Host`,
-                    true
-                );
-            }, 50);
-            return;
+        for (const terminal of vscode.window.terminals) {
+            terminal.dispose();
         }
 
-        vscode.window.createTerminal({
+        const newTerminal = vscode.window.createTerminal({
+            name: "pwsh",
             cwd: cwdPath,
         });
+        newTerminal.show(false);
     }
 
     function resolveWorkspaceFolderPath(
@@ -344,6 +343,68 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         return path.join(basePath, pathBase.trim());
+    }
+
+    function resolveProfileWorkdir(profile: Profile): string | undefined {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || !workspaceFolders.length) {
+            return undefined;
+        }
+
+        if (profile.folderFirst && profile.folderFirst.trim() !== "") {
+            return (
+                resolveWorkspaceFolderPath(
+                    profile.folderFirst,
+                    profile.pathBase
+                ) ??
+                applyPathBase(workspaceFolders[0].uri.fsPath, profile.pathBase)
+            );
+        }
+
+        return applyPathBase(workspaceFolders[0].uri.fsPath, profile.pathBase);
+    }
+
+    async function writeCodexWorkdirContext(
+        profile: Profile,
+        workdir?: string
+    ): Promise<void> {
+        if (!workdir || workdir.trim() === "") {
+            return;
+        }
+
+        try {
+            const codexDir = path.join(os.homedir(), ".codex");
+            fs.mkdirSync(codexDir, { recursive: true });
+
+            const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
+            const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+            const content = [
+                "# Codex Workdir Context",
+                "",
+                `- updatedAt: ${new Date().toISOString()}`,
+                `- profile: ${profile.name}`,
+                `- workdir: ${workdir}`,
+                `- pathBase: ${profile.pathBase?.trim() ?? ""}`,
+                `- folderFirst: ${profile.folderFirst?.trim() ?? ""}`,
+                `- workspaceFile: ${workspaceFile ?? ""}`,
+                `- workspaceFolders: ${workspaceFolders
+                    .map((folder) => folder.uri.fsPath)
+                    .join(", ")}`,
+                "",
+                "Use the workdir above as the preferred working directory for Codex.",
+                "",
+                `Recommended workdir: \`${workdir}\``,
+                "",
+            ].join("\n");
+
+            fs.writeFileSync(
+                path.join(codexDir, "context-workdir.md"),
+                content,
+                "utf8"
+            );
+        } catch (error) {
+            console.error("Failed to write Codex workdir context.", error);
+        }
     }
 
 

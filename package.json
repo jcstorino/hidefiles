@@ -2,7 +2,7 @@
     "name": "hidefiles",
     "displayName": "Hide Files",
     "description": "User configurable profiles that hide certain files.",
-    "version": "2.1.22",
+    "version": "2.1.39",
     "icon": "images/icon.png",
     "engines": {
         "vscode": "^1.58.1"
@@ -13,6 +13,7 @@
     ],
     "activationEvents": [
         "onView:hidden-files",
+        "onCommand:hide-files.show",
         "onCommand:hidefiles.reloadConfig",
         "onCommand:hidefiles.applyProfile",
         "onStartupFinished"
@@ -52,6 +53,10 @@
                 }
             ],
             "commandPalette": [
+                {
+                    "command": "hide-files.show",
+                    "when": "false"
+                },
                 {
                     "command": "hidefiles.hidefile",
                     "when": "false"
@@ -112,6 +117,10 @@
             ]
         },
         "commands": [
+            {
+                "command": "hide-files.show",
+                "title": "Hide Files: Show Profile"
+            },
             {
                 "command": "hidefiles.reloadConfig",
                 "title": "Hide Files: Reload Profile"

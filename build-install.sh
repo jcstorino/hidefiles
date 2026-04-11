@@ -10,6 +10,8 @@ npm version patch --no-git-tag-version
 
 VERSION=$(node -p "require('./package.json').version")
 
+rm -f ./hidefiles-*.vsix
+
 npx vsce package --no-yarn
 
 code-insiders --install-extension "./hidefiles-${VERSION}.vsix" --force
