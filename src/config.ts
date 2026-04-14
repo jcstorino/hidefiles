@@ -9,7 +9,6 @@ export interface Profile {
     hidden: string[];
     peek?: string[];
     enabled?: boolean;
-    folderFirst?: string;
     pathBase?: string;
 }
 

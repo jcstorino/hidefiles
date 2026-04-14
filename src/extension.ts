@@ -192,81 +192,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     async function prioritizeWorkspaceFolder(profile: Profile): Promise<void> {
-        const matchName = profile.folderFirst;
-        const fallbackPath = resolveProfileWorkdir(profile);
-        if (!matchName || matchName.trim() === "") {
-            await writeCodexWorkdirContext(profile, fallbackPath);
-            return;
-        }
-
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length < 2) {
-            await writeCodexWorkdirContext(profile, fallbackPath);
-            return;
-        }
-
-        const normalizedMatch = matchName.trim().toLowerCase();
-        const matchedIndex = workspaceFolders.findIndex(
-            (folder) =>
-                folder.name?.trim().toLowerCase() === normalizedMatch
-        );
-
-        if (matchedIndex < 0) {
-            return;
-        }
-
-        const preferredFolder = workspaceFolders[matchedIndex];
-        const terminalPath =
-            resolveWorkspaceFolderPath(matchName, profile.pathBase) ??
-            applyPathBase(preferredFolder.uri.fsPath, profile.pathBase);
-        const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
-        const attemptKey = `folderFirst:${workspaceFile ?? "none"}:${profile.name}:${matchName}`;
-        const lastAttempt = context.workspaceState.get<string>(
-            "hidefiles.folderFirst.lastAttempt"
-        );
-        const lastAttemptAt = context.workspaceState.get<number>(
-            "hidefiles.folderFirst.lastAttemptAt"
-        );
-        if (
-            lastAttempt === attemptKey &&
-            lastAttemptAt &&
-            Date.now() - lastAttemptAt < 10000
-        ) {
-            await updateTerminalCwd(terminalPath);
-            await writeCodexWorkdirContext(profile, terminalPath);
-            return;
-        }
-
-        if (matchedIndex > 0) {
-            const reordered = [
-                preferredFolder,
-                ...workspaceFolders.filter(
-                    (_, index) => index !== matchedIndex
-                ),
-            ];
-            const updated = vscode.workspace.updateWorkspaceFolders(
-                0,
-                workspaceFolders.length,
-                ...reordered.map((folder) => ({
-                    uri: folder.uri,
-                    name: folder.name,
-                }))
-            );
-            if (!updated) {
-                return;
-            }
-        }
-
-        await updateTerminalCwd(terminalPath);
+        const terminalPath = resolveProfileWorkdir(profile);
         await writeCodexWorkdirContext(profile, terminalPath);
-        await context.workspaceState.update(
-            "hidefiles.folderFirst.lastAttempt",
-            attemptKey
-        );
-        await context.workspaceState.update(
-            "hidefiles.folderFirst.lastAttemptAt",
-            Date.now()
-        );
+        await updateTerminalCwd(terminalPath ?? "");
     }
 
     async function updateTerminalCwd(cwdPath: string): Promise<void> {
@@ -285,56 +213,77 @@ export async function activate(context: vscode.ExtensionContext) {
         newTerminal.show(false);
     }
 
-    function resolveWorkspaceFolderPath(
-        folderName?: string,
-        pathBase?: string
-    ): string | undefined {
-        if (!folderName || folderName.trim() === "") {
+    function resolveProfileBaseFolder(
+        profile: Profile
+    ): vscode.WorkspaceFolder | undefined {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || !workspaceFolders.length) {
             return undefined;
         }
 
-        const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
-        if (!workspaceFile || !fs.existsSync(workspaceFile)) {
-            return undefined;
-        }
-
-        try {
-            const raw = fs.readFileSync(workspaceFile, "utf8");
-            const data = JSON.parse(raw) as {
-                folders?: Array<{ name?: string; path?: string; uri?: string }>;
-            };
-            if (!Array.isArray(data.folders)) {
-                return undefined;
-            }
-
-            const normalizedName = folderName.trim().toLowerCase();
-            const folderEntry = data.folders.find(
-                (folder) =>
-                    folder.name?.trim().toLowerCase() === normalizedName
+        const trimmedPathBase = profile.pathBase?.trim();
+        if (trimmedPathBase) {
+            const byPathBase = workspaceFolders.find((folder) =>
+                fs.existsSync(path.join(folder.uri.fsPath, trimmedPathBase))
             );
-            if (!folderEntry) {
-                return undefined;
+            if (byPathBase) {
+                return byPathBase;
             }
+        }
 
-            if (folderEntry.path) {
-                const basePath = path.resolve(
-                    path.dirname(workspaceFile),
-                    folderEntry.path
-                );
-                return applyPathBase(basePath, pathBase);
-            }
+        const normalizedHints = getProfileNameHints(profile.name).map(
+            normalizeProfileKey
+        );
 
-            if (folderEntry.uri) {
-                try {
-                    const basePath = vscode.Uri.parse(folderEntry.uri).fsPath;
-                    return applyPathBase(basePath, pathBase);
-                } catch {
-                    return undefined;
-                }
-            }
-        } catch (error) {}
+        return workspaceFolders.find((folder) => {
+            const normalizedFolderName = normalizeProfileKey(folder.name);
+            return normalizedHints.some(
+                (hint) =>
+                    hint === normalizedFolderName ||
+                    hint.startsWith(normalizedFolderName) ||
+                    normalizedFolderName.startsWith(hint)
+            );
+        });
+    }
 
-        return undefined;
+    function getProfileNameHints(profileName: string): string[] {
+        const rawName = profileName.replace(/^Show\s*\|\s*/i, "").trim();
+        const hints = [rawName];
+        const plusSegments = rawName
+            .split("+")
+            .map((segment) => segment.trim())
+            .filter((segment) => segment !== "");
+
+        hints.push(...plusSegments);
+
+        const firstSegment = plusSegments[0] ?? rawName;
+        const words = firstSegment
+            .split(/\s+/)
+            .map((word) => word.trim())
+            .filter((word) => word !== "");
+
+        if (words.length >= 1) {
+            hints.push(words[0]);
+        }
+
+        if (words.length >= 2) {
+            hints.push(words.slice(0, 2).join(" "));
+        }
+
+        return [...new Set(hints)];
+    }
+
+    function normalizeProfileKey(value: string): string {
+        return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    }
+
+    function resolveWorkspaceFolderPath(profile: Profile): string | undefined {
+        const baseFolder = resolveProfileBaseFolder(profile);
+        if (!baseFolder) {
+            return undefined;
+        }
+
+        return applyPathBase(baseFolder.uri.fsPath, profile.pathBase);
     }
 
     function applyPathBase(basePath: string, pathBase?: string): string {
@@ -351,17 +300,10 @@ export async function activate(context: vscode.ExtensionContext) {
             return undefined;
         }
 
-        if (profile.folderFirst && profile.folderFirst.trim() !== "") {
-            return (
-                resolveWorkspaceFolderPath(
-                    profile.folderFirst,
-                    profile.pathBase
-                ) ??
-                applyPathBase(workspaceFolders[0].uri.fsPath, profile.pathBase)
-            );
-        }
-
-        return applyPathBase(workspaceFolders[0].uri.fsPath, profile.pathBase);
+        return (
+            resolveWorkspaceFolderPath(profile) ??
+            applyPathBase(workspaceFolders[0].uri.fsPath, profile.pathBase)
+        );
     }
 
     async function writeCodexWorkdirContext(
@@ -385,7 +327,6 @@ export async function activate(context: vscode.ExtensionContext) {
                 `- profile: ${profile.name}`,
                 `- workdir: ${workdir}`,
                 `- pathBase: ${profile.pathBase?.trim() ?? ""}`,
-                `- folderFirst: ${profile.folderFirst?.trim() ?? ""}`,
                 `- workspaceFile: ${workspaceFile ?? ""}`,
                 `- workspaceFolders: ${workspaceFolders
                     .map((folder) => folder.uri.fsPath)
